@@ -14,15 +14,6 @@ FD_API_KEY = os.getenv("FD_API_KEY", "tu_api_key_aqui")
 FD_BASE_URL = "https://api.football-data.org/v4"
 FD_RATE_LIMIT_PER_MINUTE = 10  # Free tier
 
-# Eloratings.net scraping
-ELORATINGS_URL = "https://www.eloratings.net/World"
-
-# OpenFootball raw URLs
-OPENFOOTBALL_URLS = {
-    year: f"https://raw.githubusercontent.com/openfootball/worldcup.json/master/{year}/worldcup.json"
-    for year in [2014, 2018, 2022, 2026]
-}
-
 # Kaggle dataset (martj42/international-football-results-from-1872-to-2017)
 KAGGLE_RESULTS_CSV = RAW_DATA_DIR / "results.csv"
 
