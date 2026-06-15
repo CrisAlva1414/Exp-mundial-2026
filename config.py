@@ -3,34 +3,39 @@ from pathlib import Path
 
 # Paths
 DATA_DIR = Path("data")
+RAW_DATA_DIR = DATA_DIR / "raw"
 LOGS_DIR = Path("logs")
 STATE_FILE = Path("state.json")
+ELO_CSV = DATA_DIR / "elo_current.csv"
+MATCHES_CSV = DATA_DIR / "matches.csv"
 
 # Football-Data.org
 FD_API_KEY = os.getenv("FD_API_KEY", "tu_api_key_aqui")
 FD_BASE_URL = "https://api.football-data.org/v4"
 FD_RATE_LIMIT_PER_MINUTE = 10  # Free tier
 
-# Eloratings.net
-ELORATINGS_URL = "https://www.eloratings.net"
-ELORATINGS_CSV_URL = "https://www.eloratings.net/export/matches.csv"
+# Eloratings.net scraping
+ELORATINGS_URL = "https://www.eloratings.net/World"
 
-# OpenFootball
-OPENFOOTBALL_REPO = "https://raw.githubusercontent.com/openfootball/worldcup.json/master"
+# OpenFootball raw URLs
+OPENFOOTBALL_URLS = {
+    year: f"https://raw.githubusercontent.com/openfootball/worldcup.json/master/{year}/worldcup.json"
+    for year in [2014, 2018, 2022, 2026]
+}
 
-# Competiciones a ingestar
+# Kaggle dataset (martj42/international-football-results-from-1872-to-2017)
+KAGGLE_RESULTS_CSV = RAW_DATA_DIR / "results.csv"
+
+# Competiciones para football-data.org
 COMPETITIONS = {
     "WC": {"name": "FIFA World Cup", "seasons": [2014, 2018, 2022, 2026]},
     "CL": {"name": "UEFA Champions League", "seasons": [2023, 2024]},
     "PL": {"name": "Premier League", "seasons": [2023, 2024]},
+    "PD": {"name": "La Liga", "seasons": [2023, 2024]},
+    "SA": {"name": "Serie A", "seasons": [2023, 2024]},
 }
 
-# Control de schedule
-FETCH_SCHEDULE = {
-    "football_data": "0 1 * * *",      # 1am diario
-    "eloratings": "0 2 * * *",         # 2am diario
-    "openfootball": "0 3 * * 0",       # 3am cada domingo
-}
-
+# Crear directorios
 DATA_DIR.mkdir(exist_ok=True)
+RAW_DATA_DIR.mkdir(exist_ok=True)
 LOGS_DIR.mkdir(exist_ok=True)
