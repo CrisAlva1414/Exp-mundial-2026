@@ -1,0 +1,8 @@
+#data
+*.json
+*.csv
+*.xlsx
+*.xls
+*.db
+*.sqlite
+*.sql
