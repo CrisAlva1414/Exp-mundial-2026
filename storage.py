@@ -1,22 +1,12 @@
 import json
 import pandas as pd
-from pathlib import Path
-from config import MATCHES_CSV, ELO_CSV, STATE_FILE
+from config import MATCHES_CSV, ELO_CSV
 
 
 def load_matches() -> pd.DataFrame:
     if MATCHES_CSV.exists():
-        return pd.read_csv(MATCHES_CSV)
+        return pd.read_csv(MATCHES_CSV, parse_dates=["date"])
     return pd.DataFrame()
-
-
-def save_matches(df: pd.DataFrame):
-    if df.empty:
-        return
-
-    df = df.drop_duplicates(subset=["match_id"])
-    df = df.sort_values("date").reset_index(drop=True)
-    df.to_csv(MATCHES_CSV, index=False)
 
 
 def load_elo() -> pd.DataFrame:
@@ -25,13 +15,8 @@ def load_elo() -> pd.DataFrame:
     return pd.DataFrame()
 
 
-def load_state() -> dict:
-    if STATE_FILE.exists():
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    return {}
-
-
-def save_state(state: dict):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2)
+def elo_map(elo_df: pd.DataFrame = None) -> dict:
+    df = elo_df if elo_df is not None else load_elo()
+    if df.empty:
+        return {}
+    return dict(zip(df["team"].str.lower(), df["elo_rating"].astype(float)))

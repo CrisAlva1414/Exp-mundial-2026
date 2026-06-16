@@ -3,60 +3,53 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.calibration import CalibratedClassifierCV
-from xgboost import XGBClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, roc_auc_score
+from xgboost import XGBClassifier
 
 
 class XGBoostPredictor:
-    """XGBoost classifier with calibration for multi-class prediction"""
 
     def __init__(self):
         self.model = XGBClassifier(
-            n_estimators=100,
-            max_depth=6,
-            learning_rate=0.1,
+            n_estimators=300,
+            max_depth=5,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            min_child_weight=3,
             random_state=42,
-            scale_pos_weight=1,
+            eval_metric="mlogloss",
         )
-        self.calibrator = CalibratedClassifierCV(
-            self.model,
-            method="isotonic",
-            cv=5
-        )
+        self.calibrator = CalibratedClassifierCV(self.model, method="isotonic", cv=5)
         self.scaler = StandardScaler()
+        self.feature_names = []
 
-    def train(self, X: np.ndarray, y: np.ndarray) -> dict:
-        """
-        Train XGBoost with calibration
-        X: (n_samples, n_features) - feature matrix
-        y: (n_samples,) - labels [0=home_win, 1=draw, 2=away_win]
-        """
+    def train(self, X: np.ndarray, y: np.ndarray, feature_names: list = None) -> dict:
+        if feature_names:
+            self.feature_names = feature_names
         X_scaled = self.scaler.fit_transform(X)
         self.calibrator.fit(X_scaled, y)
         return self.evaluate(X_scaled, y)
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
-        """
-        Predict probabilities for 3 classes
-        Return: (n_samples, 3) array with [P(home_win), P(draw), P(away_win)]
-        """
         X_scaled = self.scaler.transform(X)
         return self.calibrator.predict_proba(X_scaled)
 
     def evaluate(self, X: np.ndarray, y: np.ndarray) -> dict:
-        """Evaluate model on given data"""
-        y_pred = self.calibrator.predict(X)
+        y_pred  = self.calibrator.predict(X)
         y_proba = self.calibrator.predict_proba(X)
-
-        return {
-            "accuracy": float(accuracy_score(y, y_pred)),
+        metrics = {
+            "accuracy":  float(accuracy_score(y, y_pred)),
             "precision": float(precision_score(y, y_pred, average="macro", zero_division=0)),
-            "recall": float(recall_score(y, y_pred, average="macro", zero_division=0)),
-            "auc_ovo": float(roc_auc_score(y, y_proba, multi_class="ovo", zero_division=0)),
+            "recall":    float(recall_score(y, y_pred, average="macro", zero_division=0)),
         }
+        try:
+            metrics["auc_ovo"] = float(roc_auc_score(y, y_proba, multi_class="ovo"))
+        except ValueError:
+            metrics["auc_ovo"] = None
+        return metrics
 
     def save(self, model_path: str, scaler_path: str):
-        """Save model and scaler"""
         with open(model_path, "wb") as f:
             pickle.dump(self.calibrator, f)
         with open(scaler_path, "wb") as f:
@@ -64,7 +57,6 @@ class XGBoostPredictor:
 
     @classmethod
     def load(cls, model_path: str, scaler_path: str):
-        """Load model and scaler"""
         instance = cls()
         with open(model_path, "rb") as f:
             instance.calibrator = pickle.load(f)
@@ -74,220 +66,177 @@ class XGBoostPredictor:
 
 
 class FeatureBuilder:
-    """Build features for XGBoost from historical match data"""
+
+    COMPETITIONS = ["WC", "CA", "EC", "AFCON", "AFC", "CONCACAF", "NL", "CL", "PL", "PD", "SA", "FR", "OTHER"]
 
     def __init__(self):
-        self.feature_names = []
+        self.feature_names = self._build_feature_names()
 
-    def fit_transform(self, df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list]:
-        """
-        Build features from historical matches
-        df: matches.csv with columns: date, home_team, away_team, home_goals, away_goals, competition, venue, etc.
-        Returns: (X, y, feature_names)
-        """
+    def _build_feature_names(self) -> list:
+        base = [
+            "home_form_goals_5", "away_form_goals_5",
+            "home_form_pts_5",   "away_form_pts_5",
+            "home_goals_avg_all", "away_goals_avg_all",
+            "home_conceded_avg",  "away_conceded_avg",
+            "home_days_rest",     "away_days_rest",
+            "elo_diff",
+            "home_advantage",
+            "is_neutral",
+            "home_win_rate",      "away_win_rate",
+            "head2head_home_wins", "head2head_draws",
+        ]
+        return base + [f"comp_{c}" for c in self.COMPETITIONS]
+
+    def fit_transform(self, df: pd.DataFrame, elo_df: pd.DataFrame = None) -> tuple:
         df = df.copy()
         df["date"] = pd.to_datetime(df["date"])
         df = df.sort_values("date").reset_index(drop=True)
 
-        X_list = []
-        y_list = []
+        elo_map = self._build_elo_map(elo_df) if elo_df is not None and not elo_df.empty else {}
 
-        for idx, row in df.iterrows():
-            features = self._build_features(row, df.iloc[:idx])
-            if features is not None:
-                X_list.append(features["features"])
-                y_list.append(features["target"])
+        X_list, y_list = [], []
 
-        if not X_list:
-            return np.array([]), np.array([]), []
+        for idx in range(len(df)):
+            row     = df.iloc[idx]
+            history = df.iloc[:idx]
 
-        X = np.array(X_list)
-        y = np.array(y_list)
+            if len(history) < 20:
+                continue
 
-        self.feature_names = features["feature_names"]
+            feats = self._build_features(row, history, elo_map)
+            X_list.append(feats)
 
-        return X, y, self.feature_names
+            hg = int(row["home_goals"])
+            ag = int(row["away_goals"])
+            y_list.append(0 if hg > ag else (1 if hg == ag else 2))
 
-    def _build_features(self, match: pd.Series, history: pd.DataFrame) -> dict | None:
-        """Build features for a single match"""
+        return np.array(X_list), np.array(y_list), self.feature_names
+
+    def _build_elo_map(self, elo_df: pd.DataFrame) -> dict:
+        return dict(zip(elo_df["team"].str.lower(), elo_df["elo_rating"].astype(float)))
+
+    def _build_features(self, match: pd.Series, history: pd.DataFrame, elo_map: dict) -> list:
         home = match["home_team"]
         away = match["away_team"]
-        competition = match.get("competition", "")
+        comp = match.get("competition", "OTHER")
         date = match["date"]
-        is_neutral = match.get("venue", "") == "neutral"
+        is_neutral = str(match.get("venue", "")).lower() == "neutral"
 
-        if history.empty:
-            return None
+        h2h = self._head2head(home, away, history, n=10)
 
-        # Form features (last 5 matches)
-        home_form_5 = self._calculate_form(home, history, last_n=5, as_home=True)
-        away_form_5 = self._calculate_form(away, history, last_n=5, as_home=False)
+        feats = [
+            self._goals_avg(home, history, side="home",  n=5),
+            self._goals_avg(away, history, side="away",  n=5),
+            self._form_pts(home, history, side="home",   n=5),
+            self._form_pts(away, history, side="away",   n=5),
+            self._goals_avg(home, history, side="home"),
+            self._goals_avg(away, history, side="away"),
+            self._conceded_avg(home, history, side="home"),
+            self._conceded_avg(away, history, side="away"),
+            self._days_rest(home, history, ref=date),
+            self._days_rest(away, history, ref=date),
+            self._elo_diff(home, away, elo_map),
+            0.0 if is_neutral else 1.0,
+            1.0 if is_neutral else 0.0,
+            self._win_rate(home, history, side="home"),
+            self._win_rate(away, history, side="away"),
+            h2h["home_wins"],
+            h2h["draws"],
+        ] + self._onehot_competition(comp)
 
-        # Form recent (W=3, D=1, L=0)
-        home_form_recent = self._calculate_form_recent(home, history, last_n=3, as_home=True)
-        away_form_recent = self._calculate_form_recent(away, history, last_n=3, as_home=False)
+        return feats
 
-        # Goals averages
-        home_goals_avg = self._calculate_goals_avg(home, history, as_home=True)
-        away_goals_conceded_avg = self._calculate_goals_conceded_avg(away, history, as_home=False)
+    def _goals_avg(self, team: str, history: pd.DataFrame, side: str, n: int = None) -> float:
+        col_team  = "home_team" if side == "home" else "away_team"
+        col_goals = "home_goals" if side == "home" else "away_goals"
+        rows = history[history[col_team] == team]
+        if n:
+            rows = rows.tail(n)
+        return float(rows[col_goals].mean()) if not rows.empty else 1.2
 
-        # Days since last match
-        home_days_since = self._days_since_last_match(home, history, as_home=True, current_date=date)
-        away_days_since = self._days_since_last_match(away, history, as_home=False, current_date=date)
+    def _form_pts(self, team: str, history: pd.DataFrame, side: str, n: int = 5) -> float:
+        col_team = "home_team" if side == "home" else "away_team"
+        rows = history[history[col_team] == team].tail(n)
+        pts = 0
+        for _, m in rows.iterrows():
+            hg, ag = int(m["home_goals"]), int(m["away_goals"])
+            if side == "home":
+                pts += 3 if hg > ag else (1 if hg == ag else 0)
+            else:
+                pts += 3 if ag > hg else (1 if ag == hg else 0)
+        return float(pts)
 
-        # Home advantage
-        home_advantage = 0 if is_neutral else 1
-
-        # ELO diff (hardcoded 0 for now, would need external source)
-        elo_diff = 0
-
-        # Binary features
-        is_knockout = 0  # Would need match-level info
-        is_neutral_venue = 1 if is_neutral else 0
-
-        # One-hot encoding for competition
-        comp_features = self._onehot_competition(competition)
-
-        # Target (home_goals vs away_goals)
-        home_goals = int(match["home_goals"])
-        away_goals = int(match["away_goals"])
-        if home_goals > away_goals:
-            target = 0  # Home win
-        elif home_goals == away_goals:
-            target = 1  # Draw
+    def _conceded_avg(self, team: str, history: pd.DataFrame, side: str, n: int = None) -> float:
+        if side == "home":
+            rows = history[history["home_team"] == team]
+            col  = "away_goals"
         else:
-            target = 2  # Away win
+            rows = history[history["away_team"] == team]
+            col  = "home_goals"
+        if n:
+            rows = rows.tail(n)
+        return float(rows[col].mean()) if not rows.empty else 1.2
 
-        features = [
-            home_form_5,
-            away_form_5,
-            home_form_recent,
-            away_form_recent,
-            home_goals_avg,
-            away_goals_conceded_avg,
-            home_days_since,
-            away_days_since,
-            home_advantage,
-            elo_diff,
-            is_knockout,
-            is_neutral_venue,
-        ] + comp_features
+    def _win_rate(self, team: str, history: pd.DataFrame, side: str, n: int = 20) -> float:
+        col_team = "home_team" if side == "home" else "away_team"
+        rows = history[history[col_team] == team].tail(n)
+        if rows.empty:
+            return 0.33
+        wins = sum(
+            1 for _, m in rows.iterrows()
+            if (side == "home" and m["home_goals"] > m["away_goals"])
+            or (side == "away" and m["away_goals"] > m["home_goals"])
+        )
+        return float(wins / len(rows))
 
-        feature_names = [
-            "home_form_5",
-            "away_form_5",
-            "home_form_recent",
-            "away_form_recent",
-            "home_goals_avg",
-            "away_goals_conceded_avg",
-            "home_days_since",
-            "away_days_since",
-            "home_advantage",
-            "elo_diff",
-            "is_knockout",
-            "is_neutral_venue",
-        ] + [f"comp_{c}" for c in ["WC", "CL", "PL", "PD", "SA", "OTHER"]]
+    def _days_rest(self, team: str, history: pd.DataFrame, ref) -> float:
+        rows = history[(history["home_team"] == team) | (history["away_team"] == team)].sort_values("date")
+        if rows.empty:
+            return 30.0
+        return float((ref - rows.iloc[-1]["date"]).days)
 
-        return {
-            "features": features,
-            "target": target,
-            "feature_names": feature_names,
-        }
+    def _elo_diff(self, home: str, away: str, elo_map: dict) -> float:
+        h = elo_map.get(home.lower(), 1500.0)
+        a = elo_map.get(away.lower(), 1500.0)
+        return float(h - a)
 
-    def _calculate_form(self, team: str, history: pd.DataFrame, last_n: int = 5, as_home: bool = True) -> float:
-        """Calculate average goals in last N matches"""
-        if as_home:
-            matches = history[history["home_team"] == team].tail(last_n)
-            if matches.empty:
-                return 0.0
-            return float(matches["home_goals"].mean())
-        else:
-            matches = history[history["away_team"] == team].tail(last_n)
-            if matches.empty:
-                return 0.0
-            return float(matches["away_goals"].mean())
-
-    def _calculate_form_recent(self, team: str, history: pd.DataFrame, last_n: int = 3, as_home: bool = True) -> float:
-        """Calculate form points: W=3, D=1, L=0"""
-        points = 0
-        if as_home:
-            matches = history[history["home_team"] == team].tail(last_n)
-            for _, m in matches.iterrows():
-                if m["home_goals"] > m["away_goals"]:
-                    points += 3
-                elif m["home_goals"] == m["away_goals"]:
-                    points += 1
-        else:
-            matches = history[history["away_team"] == team].tail(last_n)
-            for _, m in matches.iterrows():
-                if m["away_goals"] > m["home_goals"]:
-                    points += 3
-                elif m["away_goals"] == m["home_goals"]:
-                    points += 1
-        return float(points)
-
-    def _calculate_goals_avg(self, team: str, history: pd.DataFrame, as_home: bool = True) -> float:
-        """Average goals per match in the season"""
-        if as_home:
-            matches = history[history["home_team"] == team]
-            if matches.empty:
-                return 0.0
-            return float(matches["home_goals"].mean())
-        else:
-            matches = history[history["home_team"] == team]
-            if matches.empty:
-                return 0.0
-            return float(matches["away_goals"].mean())
-
-    def _calculate_goals_conceded_avg(self, team: str, history: pd.DataFrame, as_home: bool = True) -> float:
-        """Average goals conceded per match"""
-        if as_home:
-            matches = history[history["away_team"] == team]
-            if matches.empty:
-                return 0.0
-            return float(matches["away_goals"].mean())
-        else:
-            matches = history[history["home_team"] == team]
-            if matches.empty:
-                return 0.0
-            return float(matches["home_goals"].mean())
-
-    def _days_since_last_match(self, team: str, history: pd.DataFrame, as_home: bool = True, current_date=None) -> float:
-        """Days since last match"""
-        if as_home:
-            matches = history[history["home_team"] == team].sort_values("date")
-        else:
-            matches = history[history["away_team"] == team].sort_values("date")
-
-        if matches.empty:
-            return 0.0
-
-        last_date = matches.iloc[-1]["date"]
-        if current_date is None:
-            current_date = history["date"].max()
-
-        delta = (current_date - last_date).days
-        return float(delta)
+    def _head2head(self, home: str, away: str, history: pd.DataFrame, n: int = 10) -> dict:
+        mask = (
+            ((history["home_team"] == home) & (history["away_team"] == away)) |
+            ((history["home_team"] == away) & (history["away_team"] == home))
+        )
+        h2h = history[mask].tail(n)
+        hw = draws = 0
+        for _, m in h2h.iterrows():
+            if m["home_team"] == home:
+                if m["home_goals"] > m["away_goals"]:   hw += 1
+                elif m["home_goals"] == m["away_goals"]: draws += 1
+            else:
+                if m["away_goals"] > m["home_goals"]:   hw += 1
+                elif m["away_goals"] == m["home_goals"]: draws += 1
+        total = len(h2h) or 1
+        return {"home_wins": hw / total, "draws": draws / total}
 
     def _onehot_competition(self, comp: str) -> list:
-        """One-hot encoding for competition"""
-        comps = ["WC", "CL", "PL", "PD", "SA", "OTHER"]
-        return [1.0 if comp == c else 0.0 for c in comps]
+        return [1.0 if comp == c else 0.0 for c in self.COMPETITIONS]
 
-    def transform(self, home_team: str, away_team: str, competition: str, date, df_history: pd.DataFrame) -> np.ndarray:
-        """Transform a single match to features"""
-        match = pd.Series({
-            "home_team": home_team,
-            "away_team": away_team,
+    def transform_single(
+        self,
+        home_team: str,
+        away_team: str,
+        competition: str,
+        date,
+        history: pd.DataFrame,
+        elo_map: dict = None,
+    ) -> np.ndarray:
+        row = pd.Series({
+            "home_team":  home_team,
+            "away_team":  away_team,
             "competition": competition,
-            "date": date,
-            "venue": "unknown",
+            "date":       pd.to_datetime(date),
+            "venue":      "neutral",
             "home_goals": 0,
             "away_goals": 0,
         })
-
-        features = self._build_features(match, df_history)
-        if features is None:
-            return np.zeros(len(self.feature_names))
-
-        return np.array(features["features"])
+        feats = self._build_features(row, history, elo_map or {})
+        return np.array(feats)
