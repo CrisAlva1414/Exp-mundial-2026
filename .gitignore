@@ -1,11 +1,5 @@
 #data
-*.json
-*.csv
-*.xlsx
-*.xls
-*.db
-*.sqlite
-*.sql
+data/
 
 # Python
 .venv/

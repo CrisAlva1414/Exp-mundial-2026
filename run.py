@@ -53,7 +53,6 @@ signal.signal(signal.SIGTERM, handle_signal)
 
 
 def run_fetchers(skip_kaggle: bool = False, only: str = None) -> dict:
-    """Run fetchers in order and collect results"""
     results = {}
 
     fetchers_config = [
@@ -82,7 +81,6 @@ def run_fetchers(skip_kaggle: bool = False, only: str = None) -> dict:
 
 
 def print_summary(results: dict):
-    """Print summary table"""
     print("\n" + "=" * 70)
     print(f"{'Fetcher':<15} {'Status':<10} {'Records':<10} {'Timestamp':<30}")
     print("=" * 70)
