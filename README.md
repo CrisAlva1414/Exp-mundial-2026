@@ -159,3 +159,69 @@ export KAGGLE_KEY="..."
 - **ELO como feature**: `elo_diff` captura la calidad relativa de los equipos de forma continua, complementando los features de forma reciente.
 - **Neutralidad de cancha**: el Mundial 2026 se juega en USA/México/Canadá, por lo que todos los partidos se marcan como `venue=neutral` en las predicciones.
 - **Nombres de equipos**: `NAME_MAP` en `wc2026_predictor.py` normaliza las variantes del fixture a los nombres canónicos del historial (ej. "Bosnia & Herzegovina" → "Bosnia-Herzegovina").
+
+---
+
+## Ejemplo de salida (snapshot 2026-06-16)
+
+Al momento de generar las predicciones del Mundial 2026:
+
+```text
+============================================================
+FIFA WORLD CUP 2026 — PREDICCIONES COMPLETAS
+============================================================
+Partidos ya jugados: 16
+Partidos a predecir: 56
+```
+
+### Salida por partido
+
+```text
+2026-06-16  France                 vs  Senegal
+         Local 53%  Empate 33%  Visita 14%  → France (53%) | ELO diff: +203
+         Score más probable: 1-0  |  λ(1.56 - 0.94)
+
+2026-06-16  Argentina              vs  Algeria
+         Local 75%  Empate 16%  Visita 9%  → Argentina (75%) | ELO diff: +343
+         Score más probable: 1-0  |  λ(1.77 - 0.72)
+```
+
+Cada partido entrega:
+
+- Probabilidad de victoria local, empate y victoria visitante.
+- Equipo favorito.
+- Diferencia ELO entre ambos equipos.
+- Lambdas de goles esperados (`λ_home`, `λ_away`).
+- Marcador exacto más probable obtenido mediante simulación de Poisson.
+
+### Resumen por grupos
+
+Al finalizar las predicciones se calcula una tabla de puntos esperados por grupo:
+
+```text
+Group J
+1. Argentina   6.82 pts esperados (ELO 2115)
+2. Austria     3.76 pts esperados (ELO 1830)
+3. Algeria     3.48 pts esperados (ELO 1772)
+4. Jordan      2.50 pts esperados (ELO 1680)
+
+Group K
+1. Portugal    6.00 pts esperados (ELO 1989)
+2. Colombia    4.82 pts esperados (ELO 1982)
+3. DR Congo    2.86 pts esperados (ELO 1652)
+4. Uzbekistan  2.80 pts esperados (ELO 1714)
+```
+
+### Estado del pipeline
+
+```text
+fetch      ✓ skipped (CSVs present)
+pipeline   ✓ 56,363 matches → matches.csv
+train      ✓ skipped (model present)
+predict    ✓ WC 2026 predictions done
+```
+
+```text
+2026-06-16 00:56:23 [INFO] Predicted 56 matches
+2026-06-16 00:56:23 [INFO] ✅ Done
+```
